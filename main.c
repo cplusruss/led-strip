@@ -4,9 +4,6 @@
                             Rev. A, MSP430F5328
  ******************************************************************************/
 
-#define JTAG_DEBUGGING   0
-#define FACTORY_TEST     0
-
 #include <intrinsics.h>
 #include <stdlib.h>
 #include <math.h>
@@ -29,11 +26,11 @@ void main(void)
 	WDTCTL = WDTPW + WDTHOLD;       //Stop the WDT before any initialization begins
 	__no_operation();
 
+
 	initLEDPorts();					//Initialize the digital IO ports for LED outputs and Column mux
 	initPowerSupply();				//Initialize Port U for Vanode (LED ports are now set low)
 	initPorts();					//Initialize Bluetooth, buttons, POT and all IO user periphery
 	initClocks();					//Initialize system clocks
-
 	initUART();                     //Initialize UART
 	runTests();                     //Will run factory tests if SEL and DOWN are both pressed at powerup
     checkBattery();                 //Check digital output for battery low (if battery is low, blink LED)
@@ -43,19 +40,21 @@ void main(void)
 	clearImageMemories();	        //Clear image memory
 	configureTimerInterrupt();		//This starts the interrupt timers for the display
 	initFrameCountTicks();		    //Set up event timers for polling various buttons, etc. in main()
-	setupBrightness();				//Initial Brightness
 	Pattern_Change_Occured = TRUE;  //Start first frame of pattern
     __bis_SR_register(GIE);         //Enter LPM0, enable interrupts
 
+    Pattern_ID = PATTERN_ALL_WHITE;
 	while (1)
 	{
 	    readAccel();                           //Compute accelerometer values
+        readLightSensor();                     //Read the light sensor
 	    readButton();                          //Perform button operations
-	    incrementPattern();
 		computeNewScenes();			           //Compute next scenes when pattern change occurs
 	    displayNewFrame();                     //Display new frame from scene and brightness
 	    CPUSleep();                            //Check for CPU sleep condition from button
 	}
+
+
 }
 
 void checkBattery(void)
@@ -91,45 +90,42 @@ void initFrameCountTicks(void)
 
 void incrementPattern(void)
 {
-	if (Increment_Pattern_Command == TRUE)
-	{
-		if (Event_Change_Flag == FALSE)
-		{
-			if (Pattern_ID < PATTERN_END_INDEX)
-			{
-				Pattern_ID++;
-				goto patternChange;
-			}
-			else
-			{
-				Pattern_ID = PATTERN_START_INDEX;
-				goto patternChange;
-			}
-		}
+    if (Event_Change_Flag == FALSE)
+    {
+        if (Pattern_ID < PATTERN_END_INDEX)
+        {
+            Pattern_ID++;
+            goto patternChange;
+        }
+        else
+        {
+            Pattern_ID = PATTERN_START_INDEX;
+            goto patternChange;
+        }
+    }
 
-	return;
+return;
 
-	patternChange:
-		SpeedFactor = readEEPromByteWithVirginCheck(Pattern_Speed_addr[Pattern_ID], IAmAVirgin);
-		Active_Pattern_ID = Pattern_ID;      //Store the last pattern
-		Pattern_ID = PATTERN_ALL_BLACK;      //Display all black pattern
-		Pattern_ID_Frame_Number = 0;
-		writeEEPromByteWithVirginCheck(Last_Pattern_Displayed_addr, Active_Pattern_ID, IAmAVirgin);
-		Pattern_Change_Occured = TRUE;
-	}
+patternChange:
+    SpeedFactor = readEEPromByteWithVirginCheck(Pattern_Speed_addr[Pattern_ID], IAmAVirgin);
+    Active_Pattern_ID = Pattern_ID;      //Store the last pattern
+    Pattern_ID = PATTERN_ALL_BLACK;      //Display all black pattern
+    Pattern_ID_Frame_Number = 0;
+    writeEEPromByteWithVirginCheck(Last_Pattern_Displayed_addr, Active_Pattern_ID, IAmAVirgin);
+    Pattern_Change_Occured = TRUE;
 }
 
-void setupBrightness(void)
+void readLightSensor(void)
 {
 	// Read the light sensor and change current brightness
     if (Event_Change_Flag == FALSE)
     {
         Current_Brightness_Multiplier_Value = LightSensorToBrightnessLookup(Light_Sensor_Value);
-        Current_Brightness_Multiplier_Value = 22;
+        Current_Brightness_Multiplier_Value = 30;
     }
     else
     {
-        Current_Brightness_Multiplier_Value = 22;   //Brightness of event change flag
+        Current_Brightness_Multiplier_Value = 12;   //Brightness of event change flag
     }
 }
 
@@ -148,10 +144,6 @@ void displayNewFrame(void)
 
 void runTests(void)
 {
-#if FACTORY_TEST == 1
-	EEPromSetup();
-#endif
-
 	//Run Factory Test Mode
 	if (RUN_FACTORY_TEST == TRUE)
 	{
@@ -202,22 +194,22 @@ void readButtonPin(void)
     //Temporarily make Pin 1.0 an input (This is GRN_0)
     P1DIR &= ~BUTTON;
     P1REN |= BUTTON;
-    P1OUT |= BUTTON;
 
-    __delay_cycles(1000);
-
-    if ((Button_Pins & BUTTON) == BUTTON)
+    if ((Button_Pins & BUTTON) == 0x0)
     {
-        Button_Pushed = FALSE;  //Button high
+        Button_Pushed = TRUE;
+    	Pattern_ID = PATTERN_ROLLING_BALL;
+
     }
     else
     {
-    	Button_Pushed = TRUE;   //Button low
+    	Button_Pushed = FALSE;
+    	Pattern_ID = PATTERN_TWO_BALLS;
     }
 
     //Make pin P1.0 an output again (This is GRN_0)
-    P1DIR |= BUTTON;                       // Set P4.0-P2.7 outputs (Green LED port)
-    P1DS |= BUTTON;                        // Set P4.0-P2.7 drive strength high
+    P1DIR |= BIT0;                       // Set P4.0-P2.7 outputs (Green LED port)
+    P1DS |= BIT0;                        // Set P4.0-P2.7 drive strength high
 }
 
 void readButton(void)
@@ -239,7 +231,6 @@ void readButton(void)
         if (BUTTONIsHigh == TRUE)
         {
             BUTTONStayedLow = FALSE;
-            Increment_Pattern_Command = FALSE;
         }
         //Went High
         if (BUTTONWentLow && BUTTONIsHigh)
@@ -263,8 +254,6 @@ void readButton(void)
         {
             BUTTONStayedLow = FALSE;
             BUTTONHeldDownCount = 0;
-
-            Increment_Pattern_Command = TRUE;
 
             //Toggle accelerometer to UART
             Accel_Recording = ~Accel_Recording;
@@ -366,27 +355,6 @@ void SetVCoreUp(unsigned int level)
   PMMCTL0_H = 0x00;                                                   // Lock PMM registers for write access
 }
 
-static void SetVCoreDown(unsigned int level)
-{
-  PMMCTL0_H = 0xA5;                         // Open PMM module registers for write access
-  SVSMLCTL = SVSLE + SVSLRVL0 * level + SVMLE + SVSMLRRL0 * level; // Set SVS/M Low side to new level
-  while ((PMMIFG & SVSMLDLYIFG) == 0);      // Wait till SVM is settled (Delay)
-  PMMCTL0_L = (level * PMMCOREV0);          // Lower VCore
-  PMMCTL0_H = 0x00;                         // Lock PMM module registers for write access
-}
-
-void LPM4Mode(void)
-{
-	SetVCoreDown (0x03);
-	SetVCoreDown (0x02);
-	SetVCoreDown (0x01);
-	__no_operation();
-
-//      while (1);
-
-    __bis_SR_register(LPM4_bits);           //Enter LPM4
-}
-
 void CPUSleep(void)
 {
 	if (SleepCommand == TRUE)
@@ -395,28 +363,15 @@ void CPUSleep(void)
         P5OUT &= ~ENABLE_5V;
     	TA1CCTL0 &= ~CCIE;             //Disable the CCR0 interrupt for timer A0
         TA1CCTL1 &= ~CCIE;             //Disable the CCR0 interrupt for timer A1
-        P1DIR &= ~BUTTON;
-        P1REN |= BUTTON;
-        P1OUT |= BUTTON;
+    	P1DIR &= ~BUTTON;              //P1.0 is input
     	P1IFG &= ~BUTTON;              //Clear pending interrupts
     	P1IES |= BUTTON;               //Interrupt on falling edge
 
-    	if ((Button_Pins & BUTTON) == BUTTON)
+    	if ((P1IN & BUTTON) == 0x1)
     	{
     		__delay_cycles(1e6);                      //Debounce rising edge of switch
         	 P1IE |= BUTTON;                          //Interrupt Enable
-
-#if JTAG_DEBUGGING == 0
-        LPM4Mode();
-#else
-
-        //Power-on reset
-    	__no_operation();
-  	  PMMCTL0 |= 0xA5;                          //Unlock the PMM register
-  	  PMMCTL0 |= PMMSWPOR;                      //Power-on reset (self-clearing bit)
-
-#endif
-
+    	    __bis_SR_register(LPM4_bits);             //Enter LPM4
     	}
     	__no_operation();
 	}
@@ -487,19 +442,19 @@ void computeNewScenes(void)
 
 void createNextFrame(void)
 {
+    Pattern_ID_Frame_Number++;
 
-	Pattern_ID_Frame_Number++;
-
-
-	if (Pattern_ID >= 22 && Pattern_ID <= 29)
-	{
-		Pattern_ID_Frame_Number = x_accel;
-	}
+    if (Pattern_ID == PATTERN_ACCELEROMETER)
+    {
+        Pattern_ID_Frame_Number = x_accel;
+    }
 
 	switch (Pattern_ID)
 	{
 		//User interface patterns
 		case PATTERN_ALL_BLACK      : __Pattern_All_Black(); break;
+		case PATTERN_RED_FLASH      : __Pattern_Red_Flash(); break;
+		case PATTERN_GREEN_FLASH    : __Pattern_Green_Flash(); break;
 
 		//Built in customizable patterns
 		case PATTERN_ALL_WHITE      : Pattern_0_All_White(); break;
@@ -509,32 +464,15 @@ void createNextFrame(void)
 		case PATTERN_ROLLING_BALL   : Pattern_6_Rolling_Ball(); break;
 		case PATTERN_TWO_BALLS      : Pattern_6_Two_Balls(); break;
 
-		//Safety patterns
-		case  PATTERN_SAFETY_BRAKE_LIGHTS_DIM        : Pattern_7_Brake_Lights_Dim(); break;
-		case  PATTERN_SAFETY_BRAKE_LIGHTS_BRIGHT     : Pattern_8_Brake_Lights_Bright(); break;
-		case  PATTERN_SAFETY_LEFT_TURN               : Pattern_9_Left_Turn(); break;
-		case  PATTERN_SAFETY_RIGHT_TURN              : Pattern_10_Right_Turn(); break;
-		case  PATTERN_SAFETY_ROTATING_WHITE_LIGHTS   : Pattern_11_Rotating_White_Lights(); break;
-
 		//Patterns from PC pattern generator application
-		case 14 : Pattern_4_U_S_A(); break;
-		case 15 : Pattern_5_COP(); break;
-		case 16 : Pattern_6_BALL_8(); break;
-		case 17 : Pattern_7_2_RODS(); break;
-		case 18 : Pattern_8_SPIRAL_SWIPE(); break;
-		case 19 : Pattern_10_MIDDLE_SWIPE(); break;
-		case 20 : Pattern_12_RASTA(); break;
-		case 21 : Pattern_13_EXPAND_CONTRACT(); break;
-
-		//Driven by accelerometer
-		case 22 : Pattern_4_U_S_A(); break;
-		case 23 : Pattern_5_COP(); break;
-		case 24 : Pattern_6_BALL_8(); break;
-		case 25 : Pattern_7_2_RODS(); break;
-		case 26 : Pattern_8_SPIRAL_SWIPE(); break;
-		case 27 : Pattern_10_MIDDLE_SWIPE(); break;
-		case 28 : Pattern_12_RASTA(); break;
-		case 29 : Pattern_13_EXPAND_CONTRACT(); break;
+		case 9 : Pattern_4_U_S_A(); break;
+		case 10 : Pattern_5_COP(); break;
+		case 11 : Pattern_6_BALL_8(); break;
+		case 12 : Pattern_7_2_RODS(); break;
+		case 13 : Pattern_8_SPIRAL_SWIPE(); break;
+		case 14 : Pattern_10_MIDDLE_SWIPE(); break;
+		case 15 : Pattern_12_RASTA(); break;
+		case 16 : Pattern_13_EXPAND_CONTRACT(); break;
 
 	    default: Pattern_0_All_White(); break;
 	}
@@ -805,15 +743,16 @@ __interrupt void TIMER1_A0_ISR(void)
 	switch (Column_Count)
 	{
 		case 6: Column_Register = ~0x01; break;
-		case 7: Column_Register = ~0x02;
-			readButtonPin();            //Read button pin before columns are complete
-		    break;
+		case 7: Column_Register = ~0x02; break;
 		case 4: Column_Register = ~0x04; break;
 		case 5: Column_Register = ~0x08; break;
 		case 3: Column_Register = ~0x10; break;
 		case 2: Column_Register = ~0x20; break;
 		case 1: Column_Register = ~0x40; break;
-		case 0: Column_Register = ~0x80; break;
+		case 0: Column_Register = ~0x80;
+			readButtonPin();
+        	break;
+
 		default: break;
 	}
 
@@ -838,8 +777,8 @@ __interrupt void TIMER1_A0_ISR(void)
 }
 
 
-#if JTAG_DEBUGGING == 0
 // Port 1 interrupt service routine
+/*
 #pragma vector=PORT1_VECTOR
 __interrupt void Port_1(void)
 {
@@ -851,6 +790,6 @@ __interrupt void Port_1(void)
 	  PMMCTL0 |= PMMSWPOR;                      //Power-on reset (self-clearing bit)
 
 }
-#endif
 
+*/
 

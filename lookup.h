@@ -1,9 +1,8 @@
 /*******************************************************************************
-                      LED Strip Microcontroller Software
+                      Bicycle Helmet Microcontroller Software
                Copyright (c) NixTech, Inc. 2012 All Rights Reserved
                             Rev. A, MSP430F5328
  ******************************************************************************/
-
 
 #ifndef LOOKUP_H_
 #define LOOKUP_H_
